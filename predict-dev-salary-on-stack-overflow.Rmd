@@ -2,7 +2,7 @@
 title: "predict-dev-salary-on-stack-overflow"
 author: "gaargly"
 date: "2023-01-30"
-output: html_document
+output: pdf_document
 ---
 
 ```{r message=FALSE, warning=FALSE}

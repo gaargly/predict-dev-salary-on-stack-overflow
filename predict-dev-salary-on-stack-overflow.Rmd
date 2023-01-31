@@ -1,0 +1,233 @@
+---
+title: "predict-dev-salary-on-stack-overflow"
+author: "gaargly"
+date: "2023-01-30"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(randomForest)
+library(rpart)
+library(vip)
+library(Hmisc)
+```
+
+```{r}
+stack_overflow <- readRDS(url("https://ericwfox.github.io/data/stack_overflow.rds"))
+```
+
+# 1. Exploratory Data Analysis
+
+We see that our response variable salary has a mean value of 72.204 (in thousands) with a standard deviation of 40.093 (in thousands).
+
+```{r}
+summary(stack_overflow$salary)
+sd(stack_overflow$salary)
+```
+
+We also observe that there are 6991 values of salary with 1104 distinct values. Below, some additional percentiles of salary are also reported.
+
+```{r}
+describe(stack_overflow$salary)
+
+```
+
+Per the below histogram, we see that our response variable salary has a right skew.
+
+```{r message=FALSE}
+ggplot(stack_overflow, aes(x=salary)) + geom_histogram(binwidth=5)
+```
+
+It looks like bigger companies, i.e. companies with more employees, offer higher salaries on average, though there are outliers with very high salaries in companies with under 10,000 employees.
+
+```{r}
+# Company size vs. Salary
+ggplot(stack_overflow, aes(x = factor(company_size_number), y = salary)) +
+  geom_boxplot() +
+  labs(x = "Company size", y = "Salary (in $1000's)")
+```
+
+```{r}
+# Take a look at variables in our dataset
+glimpse(stack_overflow)
+```
+
+Years of coding experience generally correlates with higher salaries until year 13, at which point there is a surprising dip in average salaries until year 17 at which point salaries increase again. However, there is a dip in 18 and 19 years of experience, with an increase again at year 20. There are some outliers with very high salaries for those with 1 to 8 years of coding experience as well as 10 years of coding experience.
+
+```{r}
+# Years of coding experience vs. Salary
+ggplot(stack_overflow, aes(x = factor(years_coded_job), y = salary)) +
+  geom_boxplot() +
+  labs(x = "Years of coding experience", y = "Salary (in $1000's)")
+```
+Remote jobs offer higher salaries than non-remote jobs, though there are some outliers with very high salaries who work non-remote jobs.
+
+```{r}
+# Remote or not vs. Salary
+ggplot(stack_overflow, aes(x = factor(remote), y = salary)) +
+  geom_boxplot() +
+  labs(x = "Remote or not", y = "Salary (in $1000's)")
+```
+
+# 2. Cross-Validation
+
+## (a) Randomly split the stack_overflow data set in a 70% training and 30% test set. Make sure to use set.seed() so that your results are reproducible.
+
+```{r}
+set.seed(1)
+n <- nrow(stack_overflow)
+train_index <- sample(1:n, round(0.7*n))
+stack_overflow_train <- stack_overflow[train_index, ]
+stack_overflow_test <- stack_overflow[-train_index, ]
+```
+
+## (b) Use lm() to fit a multiple linear regression model on the training set, with salary as the response, and all other variables as predictors. Next, use the step() function to select a reduced set of variables, and print the regression output (coefficient table) with the summary() function. Additionally, try using the vip() function to make a variable importance plot that ranks predictors according to the absolute value of the t-test statistic for each coefficient.
+
+```{r}
+# Check dimensions of our dataset to know how many predictors we'll be working with (looks like 20 predictors if 1 is a response)
+dim(stack_overflow_train)
+```
+
+
+```{r}
+# Fit MLR model with salary as the response and all other variables as predictors
+lm_fit <- lm(salary ~ ., data = stack_overflow_train)
+
+# Use step() function to select a reduced set of variables (backwards stepwise selection using the AIC)
+lm_step_fit <- step(lm_fit, trace=F)
+
+# Print the regression output (coefficient table)
+summary(lm_step_fit)
+```
+
+```{r}
+# Check number of coefficients
+length(coef(lm_step_fit))
+```
+
+The model selected by backwards stepwise selection using the AIC has 20 coefficients, i.e. it has 19 predictors.
+
+From our Variable Important Plot, we see that the years of coding experience is the most important predictor, with whether the developer is in the U.S. being the second-most important predictor, and whether the developer is in India being the third-most important predictor.
+
+```{r}
+# Use vip() function to make a variable importance plot
+vip(lm_step_fit, num_features = 19, geom = "point", include_type = TRUE)
+```
+
+## (c) Use rpart() to fit a regression tree on the training set, with salary as the response, and all other variables as predictors. Make a plot of the resulting regression tree. Note that if you set the argument pretty = 0 in the text() function the actual category names will be displayed in the tree.
+
+```{r}
+# Fit regression tree model with salary as the response and all other variables as predictors
+t1 <- rpart(salary ~ ., data = stack_overflow_train, method = "anova")
+```
+
+```{r}
+# Plot the regression tree
+par(cex=0.7, xpd=NA)
+plot(t1)
+text(t1, use.n = TRUE, pretty = 0)
+```
+## (d) Use randomForest() to fit a random forest model on the training set, with salary as the response, and all other variables as predictors. Make a variable importance plot.
+
+```{r}
+# Use randomForest() to fit a random forest model on the training set, with salary as the response, and all other variables as predictors
+rf1 <- randomForest(salary ~ ., data = stack_overflow_train, importance = TRUE)
+rf1
+```
+
+Our Variable Importance Plot for our random forest model on the training set ranks country as the most important predictor with number of years of coding as the second most important predictor.
+
+```{r}
+# Variable Importance Plot for for our random forest model on the training set
+vip(rf1, num_features = 20, geom = "point", include_type = TRUE)
+```
+
+## (e) Make predictions on the test set and compute the RMSE and $R^2$ for the three models (multiple linear regression, regression tree, and random forests). Comment on the cross-validation results, and discuss the strengths and weaknesses of each model in terms of predictive performance and interpretability.
+
+### RMSE
+
+```{r}
+## Make predictions on test set and compute RMSE
+pred_lm <- predict(lm_step_fit, newdata = stack_overflow_test) # MLR model with backwards stepwise selection using the AIC
+pred_t1 <- predict(t1, newdata = stack_overflow_test) # Regression Tree model
+pred_rf1 <- predict(rf1, newdata = stack_overflow_test) # Random Forest model
+
+# Function to compute RMSE
+RMSE <- function(y, y_hat) {
+  sqrt(mean((y - y_hat)^2))
+}
+
+# Report RMSE of the MLR model chosen by backwards stepwise selection using the AIC
+RMSE(stack_overflow_test$salary, pred_lm)
+
+# Report RMSE of Regression Tree model
+RMSE(stack_overflow_test$salary, pred_t1)
+
+# Report RMSE of Random Forest model
+RMSE(stack_overflow_test$salary, pred_rf1)
+```
+
+### $R^2$
+
+```{r}
+# Report adjusted R^2 of the MLR model chosen by backwards stepwise selection using the AIC
+summary(lm_step_fit)$adj
+
+# Report R^2 of Regression Tree model
+cor(stack_overflow_test$salary, pred_t1)^2
+
+# Report R^2 of Random Forest model
+cor(stack_overflow_test$salary, pred_rf1)^2
+```
+
+## Comment on the cross-validation results, and discuss the strengths and weaknesses of each model in terms of predictive performance and interpretability.
+
+MLR model: RMSE ~23.13, Adjusted-$R^2$ ~0.6689 which means ~67% of the variability in salary can be explained by the model
+Regression tree model: RMSE ~24.19, $R^2$ ~0.6356 which means ~64% of the variability in salary can be explained by the model
+Random forest model:  RMSE ~22.73, $R^2$ ~0.6787 which means ~68% of the variability in salary can be explained by the model
+
+Each model offers different strengths and weaknesses in terms of predictive performance and interpretability. We notice that our random forest model has the lowest RMSE and the highest $R^2$ compared to our MLR and regression tree models. Although random forest models are useful when we have many predictors, interpretability is difficult because we are using bootstrap to produce multiple trees. On the other hand, our MLR model is easier to interpret as we can describe the effect of each predictor on the response with all other predictors held constant. Though with such a high number of predictors (19), we may be overfitting our data. We can consider options such as ridge or lasso regression to improve our variance-bias tradeoff. Our regression tree model is fairly easy to interpret as we can describe the splits in the tree fairly easily and demonstrate the relative importance of predictors visually, but we have the highest RMSE and lowest $R^2$ for this model.
+
+## (f) Make plots of the predicted versus actual values on the test set for each of the three models; add the 1-1 reference line to each plot. 
+
+```{r warning=FALSE}
+pred_df <- data.frame(
+  Actual = stack_overflow_test$salary, 
+  Pred_LM = pred_lm,
+  Pred_T = pred_t1,
+  Pred_RF = pred_rf1
+) 
+
+# MLR
+ggplot(pred_df, aes(x = Actual, y = Pred_LM)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  xlab("Actual Salary") + ylab("Predicted Salary") +
+  ggtitle("Multiple Linear Regression") +
+  xlim(0,200) + ylim(0,200)
+```
+
+```{r}
+# Regression Tree
+ggplot(pred_df, aes(x = Actual, y = Pred_T)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  xlab("Actual Salary") + ylab("Predicted Salary") +
+  ggtitle("Regression Tree") +
+  xlim(0,200) + ylim(0,200)
+```
+
+```{r}
+# Random Forests
+ggplot(pred_df, aes(x = Actual, y = Pred_RF)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  xlab("Actual Salary") + ylab("Predicted Salary") +
+  ggtitle("Random Forests") +
+  xlim(0,200) + ylim(0,200)
+```
+
+## Comment on why the patterns in the plot of the predicted versus actual values for the regression tree model look different than the random forest and linear regression models?
+
+We see a more typical scatterplot around the 1-1 reference line for our multiple linear regression model and random forest model. However, since the regression tree produces the mean of the response for all observations which fall under the terminal nodes, we see a different pattern in the plot of the predicted versus actual values for this model. The predicted values are not continuous and instead have step-like jumps in this plot for the regression tree.
